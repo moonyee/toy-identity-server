@@ -1,0 +1,27 @@
+services:
+  mariadb:
+    image: 'mariadb:latest'
+    environment:
+      - 'MARIADB_DATABASE=identity_db'
+      - 'MARIADB_PASSWORD=password123!'
+      - 'MARIADB_ROOT_PASSWORD=password1!'
+      - 'MARIADB_USER=identity-service-1'
+    ports:
+      - '3306:3306'
+  redis-identity-master:
+    image: redis:latest
+    container_name: redis-identity-master
+    ports:
+      - "6379:6379"
+
+  redis-identity-slave:
+    image: redis:latest
+    container_name: redis-identity-slave
+    ports:
+      - "6380:6379"
+    # 라벨 추가 - 스프링 부트 자동 빈등록 방지
+    labels:
+      org.springframework.boot.docker.compose.skip: "true"
+    command: redis-server --replicaof redis-identity-master 6379
+    depends_on:
+      - redis-identity-master
