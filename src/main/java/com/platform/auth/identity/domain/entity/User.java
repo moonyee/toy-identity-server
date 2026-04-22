@@ -2,6 +2,8 @@ package com.platform.auth.identity.domain.entity;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
@@ -12,30 +14,43 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 @Entity
+@Table(name = "users")
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
-@Table(name = "users")
 public class User {
+
 	@Id
-	@GeneratedValue(strategy = GenerationType.IDENTITY)
-	private Long id;
-
-	@Column(unique = true, nullable = false)
-	private String userId; // 로그인 ID
+	@Column(name = "user_id")
+	private String userId;
 
 	@Column(nullable = false)
-	private String userName; // 사용자 이름
+	private String password;
 
 	@Column(nullable = false)
-	private String password; // BCrypt 암호화된 비밀번호
+	private String userName;
 
-	private String role; // ROLE_USER 등
+	@Column(nullable = false, unique = true)
+	private String email; // 통으로 저장
+
+	@Enumerated(EnumType.STRING)
+	@Column(nullable = false)
+	private UserStatus status; // PENDING, ACTIVE 등 상태 관리
+
+	@Enumerated(EnumType.STRING)
+	private UserRole role;
 
 	@Builder
-	public User(String userId, String password, String role, String userName) {
+	public User(String userId, String password, String userName, String email, UserStatus status, UserRole role) {
 		this.userId = userId;
 		this.password = password;
-		this.role = role;
 		this.userName = userName;
+		this.email = email;
+		this.status = status;
+		this.role = role;
+	}
+
+	// 인증 완료 시 상태를 변경하는 비즈니스 메서드
+	public void activate() {
+		this.status = UserStatus.ACTIVE;
 	}
 }

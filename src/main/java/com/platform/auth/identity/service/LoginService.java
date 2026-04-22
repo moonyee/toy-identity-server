@@ -1,9 +1,14 @@
 package com.platform.auth.identity.service;
 
 import java.time.Duration;
+import java.util.List;
+
+import javax.crypto.SecretKey;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -13,6 +18,10 @@ import com.platform.auth.identity.domain.repository.UserRepository;
 import com.platform.auth.identity.exception.ErrorCode;
 import com.platform.auth.identity.exception.ErrorException;
 
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.security.Keys;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
@@ -20,70 +29,113 @@ import lombok.extern.slf4j.Slf4j;
 @Service
 @RequiredArgsConstructor
 public class LoginService {
-	@Value("${auth.max-session:3}") // 설정 파일(yml)에서 관리
-	private int MAX_SESSION;
+
+	@Value("${auth.max-session:3}")
+	private int maxSession;
+
+	@Value("${jwt.secret}")
+	private String jwtSecret;
+
+	private SecretKey signingKey;
 
 	private final UserRepository userRepository;
 	private final PasswordEncoder passwordEncoder;
 	private final JwtTokenUtil jwtTokenUtil;
 	private final StringRedisTemplate redisTemplate;
 
+	/**
+	 * 동시 로그인 세션 등록을 원자적으로 처리하는 Lua 스크립트.
+	 * - KEYS[1] = USER_SESSIONS:{userId}      (Set, 활성 jti 모음)
+	 * - KEYS[2] = AUTH:{userId}:{jti}         (개별 세션 키)
+	 * - ARGV[1] = jti
+	 * - ARGV[2] = TTL(초)
+	 * - ARGV[3] = MAX_SESSION
+	 * - 반환값 1 = 등록 성공, 0 = 한도 초과
+	 *
+	 * 단순 SCARD → SADD 패턴은 동시에 다수 로그인이 들어오면 한도를 넘길 수 있어
+	 * Lua로 원자화한다.
+	 */
+	private static final String LIMIT_SCRIPT = """
+		local current = redis.call('SCARD', KEYS[1])
+		if current >= tonumber(ARGV[3]) then
+		    return 0
+		end
+		redis.call('SADD', KEYS[1], ARGV[1])
+		redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
+		redis.call('SET', KEYS[2], ARGV[1], 'EX', tonumber(ARGV[2]))
+		return 1
+		""";
+
+	private final RedisScript<Long> limitScript =
+		new DefaultRedisScript<>(LIMIT_SCRIPT, Long.class);
+
+	@PostConstruct
+	void initSigningKey() {
+		this.signingKey = Keys.hmacShaKeyFor(jwtSecret.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+	}
+
 	public String login(String userId, String rawPassword) {
 		User user = userRepository.findByUserId(userId)
-			.orElseThrow(
-			() -> new ErrorException(ErrorCode.USER_NOT_FOUND)
-		);
+			.orElseThrow(() -> new ErrorException(ErrorCode.USER_NOT_FOUND));
 
-		// 2. 비밀번호 검증
+		// 비밀번호 불일치 시에도 사용자 존재 여부를 노출하지 않기 위해 동일한 에러 코드를 사용
 		if (!passwordEncoder.matches(rawPassword, user.getPassword())) {
-			throw new RuntimeException("Invalid password");
+			throw new ErrorException(ErrorCode.USER_NOT_FOUND);
 		}
+
+		String role = user.getRole() != null ? user.getRole().name() : "ROLE_USER";
+		String token = jwtTokenUtil.generateToken(user.getUserId(), role);
+		String jti = parseJti(token);
 
 		String sessionListKey = "USER_SESSIONS:" + userId;
+		String sessionKey = "AUTH:" + userId + ":" + jti;
 
-		// 3. 현재 세션 리스트 크기 확인 (동기)
-		Long size = redisTemplate.opsForSet().size(sessionListKey);
-		if (size != null && size >= MAX_SESSION) {
-			throw new RuntimeException("최대 " + MAX_SESSION + "대까지만 접속 가능합니다.");
+		Long ok = redisTemplate.execute(
+			limitScript,
+			List.of(sessionListKey, sessionKey),
+			jti,
+			String.valueOf(Duration.ofHours(1).toSeconds()),
+			String.valueOf(maxSession)
+		);
+
+		if (ok == null || ok == 0L) {
+			throw new ErrorException(ErrorCode.MAX_SESSION_EXCEEDED,
+				"최대 " + maxSession + "대까지만 접속 가능합니다.");
 		}
 
-		// 4. 토큰 생성 및 Redis 저장
-		String token = jwtTokenUtil.generateToken(user.getUserId());
-		String sessionKey = "AUTH:" + userId + ":" + token;
-
-		// 5. 상세 세션 저장 및 세션 리스트 추가 (순차 실행)
-		// opsForValue().set()은 리턴값이 void입니다. 에러가 나면 예외가 터지므로 if 체크가 불필요합니다.
-		redisTemplate.opsForValue().set(sessionKey, token, Duration.ofHours(1));
-
-		// Set 리스트에 추가
-		redisTemplate.opsForSet().add(sessionListKey, token);
-		// 리스트 키 자체도 만료 시간을 관리해주는 것이 좋습니다 (예: 1시간)
-		redisTemplate.expire(sessionListKey, Duration.ofHours(1));
-
-		log.info("### Redis 세션 저장 및 리스트 추가 완료: {}", userId);
-
+		log.info("### Redis 세션 저장 완료: user={}, jti={}", userId, jti);
 		return token;
 	}
 
-	/**
-	 * 로그아웃 로직 (MVC 버전)
-	 */
 	public boolean logout(String userId, String token) {
-		String sessionKey = "AUTH:" + userId + ":" + token;
+		String jti = parseJti(token);
+		String sessionKey = "AUTH:" + userId + ":" + jti;
 		String sessionListKey = "USER_SESSIONS:" + userId;
 
-		// 1. 개별 세션 키 삭제
 		Boolean isDeleted = redisTemplate.delete(sessionKey);
-
-		// 2. 세션 리스트에서 해당 토큰 제거
-		redisTemplate.opsForSet().remove(sessionListKey, token);
+		redisTemplate.opsForSet().remove(sessionListKey, jti);
 
 		if (Boolean.TRUE.equals(isDeleted)) {
-			log.info("### Redis 삭제 완료: {}", sessionKey);
+			log.info("### Redis 세션 삭제 완료: {}", sessionKey);
 			return true;
-		} else {
-			log.warn("### Redis 삭제 실패 (키 없음): {}", sessionKey);
-			return false;
+		}
+		log.warn("### Redis 세션 삭제 실패(키 없음): {}", sessionKey);
+		return false;
+	}
+
+	private String parseJti(String token) {
+		try {
+			Claims claims = Jwts.parserBuilder()
+				.setSigningKey(signingKey)
+				.build()
+				.parseClaimsJws(token)
+				.getBody();
+			String jti = claims.getId();
+			return jti != null ? jti : token; // 하위 호환: jti가 없으면 토큰 자체 사용
+		} catch (Exception e) {
+			// 토큰 파싱 실패 시에도 키 일관성을 깨지 않도록 토큰 자체를 식별자로 사용
+			log.debug("Failed to parse jti, falling back to token", e);
+			return token;
 		}
 	}
 }

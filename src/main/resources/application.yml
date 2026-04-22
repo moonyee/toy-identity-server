@@ -1,13 +1,22 @@
 server:
   port: 8182 # 게이트웨이에서 라우팅하는 포트와 일치해야 함
+  servlet:
+    context-path: /api
+    encoding:
+      charset: UTF-8
 
+# JWT 서명 비밀키. 운영에서는 반드시 환경변수 JWT_SECRET을 주입한다.
+# Gateway와 Identity가 동일 값을 사용해야 토큰 검증이 가능하므로,
+# 중기적으로는 RSA/JWKS 비대칭 키 전환을 권장한다.
 jwt:
-  secret: my_super_secret_key_that_is_long_enough_and_random # JWT 서명에 사용할 비밀키, 추후 별도 모듈로 이동필요
+  secret: ${JWT_SECRET:dev-only-please-override-with-env-variable-in-production}
 
+# Jasypt 마스터 비밀번호. 절대 평문으로 yml에 두지 말고
+# 운영에서는 -Djasypt.encryptor.password 또는 환경변수 JASYPT_PASSWORD로 주입한다.
 jasypt:
   encryptor:
     bean: jasyptStringEncryptor
-    password: "dev-test-key-001"
+    password: ${JASYPT_PASSWORD:}
     property:
       prefix: "ENC("
       suffix: ")"
@@ -18,17 +27,22 @@ auth:
 spring:
   jpa:
     hibernate:
-      # update: 엔티티와 테이블 비교 후 변경분만 반영 (개발 서버)
       ddl-auto: update
-    show-sql: true        # 콘솔에 SQL 로그 출력
+    show-sql: true
     properties:
       hibernate:
-        format_sql: true  # SQL을 보기 좋게 정렬
-        dialect: org.hibernate.dialect.MariaDBDialect # MariaDB 방언 설정
+        format_sql: true
+        dialect: org.hibernate.dialect.MariaDBDialect
+    defer-datasource-initialization: true
+  sql:
+    init:
+      mode: never
   datasource:
+    # ENC() 값은 JasyptConfig에서 강화된 알고리즘
+    # (PBEWithHMACSHA512AndAES_256)으로 다시 암호화한 값으로 교체해야 한다.
     url: jdbc:mariadb://localhost:3306/identity_db
-    username: ENC(PRcB7CdnDoSqh4NGNAVmPwyHQe7drke78GRPyzPogJE=)
-    password: ENC(Ych4NlmpR1CxD60mytthQKhvVL/a8nc8)
+    username: ENC(tKp4X45XM1qKAuyxWjfhSA3ms2CHA4wjAHKhbt0OIn7LI2ezMG1NkxB063jrH9l4txuOZzNH8GA+ZXTnX+EqoQ==)
+    password: ENC(0Fzyb93zTVWBTb0wGDwCH2fwP+9nXLGhXpm7Sd0qjilqZmb73S4PxS7zdCTA7QW7)
     driver-class-name: org.mariadb.jdbc.Driver
   data:
     redis:
@@ -40,24 +54,3 @@ spring:
       service:
         mapping:
           redis-identity-master: redis
-  spring:
-    sql:
-      init:
-        mode: always # never
-  cloud:
-    gateway:
-      default-filters:
-        - DedupeResponseHeader=Access-Control-Allow-Origin
-      globalcors:
-        cors-configurations:
-          '[/**]':
-            allowedOrigins: "*"
-            allowedMethods: "*"
-            allowedHeaders: "*"
-  main:
-    allow-bean-definition-overriding: true
-  webflux:
-    base-path: /api
-  servlet:
-    encoding:
-      charset: UTF-8
