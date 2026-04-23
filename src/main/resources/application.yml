@@ -1,13 +1,22 @@
 server:
   port: 8182 # 게이트웨이에서 라우팅하는 포트와 일치해야 함
+  servlet:
+    context-path: /api
+    encoding:
+      charset: UTF-8
 
+# JWT 서명 비밀키. 운영에서는 반드시 환경변수 JWT_SECRET을 주입한다.
+# Gateway와 Identity가 동일 값을 사용해야 토큰 검증이 가능하므로,
+# 중기적으로는 RSA/JWKS 비대칭 키 전환을 권장한다.
 jwt:
-  secret: my_super_secret_key_that_is_long_enough_and_random # JWT 서명에 사용할 비밀키, 추후 별도 모듈로 이동필요
+  secret: ${JWT_SECRET:dev-only-please-override-with-env-variable-in-production}
 
+# Jasypt 마스터 비밀번호. 절대 평문으로 yml에 두지 말고
+# 운영에서는 -Djasypt.encryptor.password 또는 환경변수 JASYPT_PASSWORD로 주입한다.
 jasypt:
   encryptor:
     bean: jasyptStringEncryptor
-    password: "dev-test-key-001"
+    password: ${JASYPT_PASSWORD:}
     property:
       prefix: "ENC("
       suffix: ")"
@@ -16,20 +25,42 @@ auth:
   max-session: 3
 
 spring:
+  # Virtual Threads (JEP 444) 활성화.
+  # Tomcat이 요청당 가상 스레드로 동작해 JDBC 블로킹 호출 동안에도
+  # OS 스레드를 점유하지 않으므로 동시 처리량이 크게 향상된다.
+  # 주의: 네이티브 블로킹 라이브러리나 synchronized 블록이 pin 이슈를 일으킬 수 있으므로
+  # 운영 투입 전 JFR/`-Djdk.tracePinnedThreads=full`로 pin 여부를 확인할 것.
+  threads:
+    virtual:
+      enabled: true
   jpa:
     hibernate:
-      # update: 엔티티와 테이블 비교 후 변경분만 반영 (개발 서버)
       ddl-auto: update
-    show-sql: true        # 콘솔에 SQL 로그 출력
+    show-sql: true
     properties:
       hibernate:
-        format_sql: true  # SQL을 보기 좋게 정렬
-        dialect: org.hibernate.dialect.MariaDBDialect # MariaDB 방언 설정
+        format_sql: true
+        dialect: org.hibernate.dialect.MariaDBDialect
+    defer-datasource-initialization: true
+  sql:
+    init:
+      mode: never
   datasource:
+    # ENC() 값은 JasyptConfig에서 강화된 알고리즘
+    # (PBEWithHmacSHA512AndAES_256)으로 다시 암호화한 값으로 교체해야 한다.
     url: jdbc:mariadb://localhost:3306/identity_db
-    username: ENC(PRcB7CdnDoSqh4NGNAVmPwyHQe7drke78GRPyzPogJE=)
-    password: ENC(Ych4NlmpR1CxD60mytthQKhvVL/a8nc8)
+    username: ENC(tKp4X45XM1qKAuyxWjfhSA3ms2CHA4wjAHKhbt0OIn7LI2ezMG1NkxB063jrH9l4txuOZzNH8GA+ZXTnX+EqoQ==)
+    password: ENC(0Fzyb93zTVWBTb0wGDwCH2fwP+9nXLGhXpm7Sd0qjilqZmb73S4PxS7zdCTA7QW7)
     driver-class-name: org.mariadb.jdbc.Driver
+    # Virtual Threads 상황에서는 Tomcat 스레드 상한이 풀리므로
+    # 다음 병목은 HikariCP 커넥션 풀이 된다. dev 기준 기본값을 약간 상향.
+    # 운영에서는 DB max_connections의 50~70% 범위로 재튜닝할 것.
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      max-lifetime: 1800000
+      keepalive-time: 300000
   data:
     redis:
       host: localhost
@@ -40,24 +71,3 @@ spring:
       service:
         mapping:
           redis-identity-master: redis
-  spring:
-    sql:
-      init:
-        mode: always # never
-  cloud:
-    gateway:
-      default-filters:
-        - DedupeResponseHeader=Access-Control-Allow-Origin
-      globalcors:
-        cors-configurations:
-          '[/**]':
-            allowedOrigins: "*"
-            allowedMethods: "*"
-            allowedHeaders: "*"
-  main:
-    allow-bean-definition-overriding: true
-  webflux:
-    base-path: /api
-  servlet:
-    encoding:
-      charset: UTF-8

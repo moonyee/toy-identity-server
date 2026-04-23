@@ -12,6 +12,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.platform.auth.identity.common.response.ApiResponseEntity;
 import com.platform.auth.identity.controller.dto.LoginDto;
+import com.platform.auth.identity.exception.ErrorCode;
+import com.platform.auth.identity.exception.ErrorException;
 import com.platform.auth.identity.service.LoginService;
 
 import jakarta.servlet.http.HttpServletRequest;
@@ -20,7 +22,7 @@ import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
 @RestController
-@RequestMapping("auth")
+@RequestMapping("/auth")
 @RequiredArgsConstructor
 public class LoginController {
 	private final LoginService authService;
@@ -40,7 +42,7 @@ public class LoginController {
 		Authentication auth = SecurityContextHolder.getContext().getAuthentication();
 
 		if (auth == null || !auth.isAuthenticated()) {
-			throw new RuntimeException("인증 정보를 찾을 수 없습니다.");
+			throw new ErrorException(ErrorCode.UNAUTHORIZED, "인증 정보를 찾을 수 없습니다.");
 		}
 
 		String userId = auth.getName();
@@ -48,11 +50,12 @@ public class LoginController {
 
 		// 2. 헤더 검증
 		if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-			throw new RuntimeException("Invalid Authorization header");
+			throw new ErrorException(ErrorCode.UNAUTHORIZED, "Invalid Authorization header");
 		}
 
 		String token = authHeader.substring(7);
-		log.info("### Logout attempt for user: {}, token: {}", userId, token.substring(0, 5) + "...");
+		// 토큰 전체를 절대 로그에 남기지 않는다. prefix 일부만 남겨 디버깅용으로 사용.
+		log.info("### Logout attempt for user: {}, token-prefix: {}...", userId, token.substring(0, Math.min(5, token.length())));
 
 		// 3. 서비스 호출 (동기 방식)
 		boolean isDeleted = authService.logout(userId, token);

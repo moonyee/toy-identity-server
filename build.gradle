@@ -10,7 +10,9 @@ description = 'identity-service'
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(17)
+        // Java 21로 업그레이드. Virtual Threads(JEP 444) 정식 지원을 받기 위함.
+        // Spring Boot 3.5.x는 Java 21을 공식 지원한다.
+        languageVersion = JavaLanguageVersion.of(21)
     }
 }
 
@@ -25,6 +27,7 @@ repositories {
 }
 
 dependencies {
+    implementation 'com.github.ulisesbocchio:jasypt-spring-boot-starter:3.0.5'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-data-redis'
     implementation 'org.springframework.boot:spring-boot-starter-web'
@@ -38,11 +41,16 @@ dependencies {
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 
-    implementation 'com.github.ulisesbocchio:jasypt-spring-boot-starter:3.0.5'
+    // JJWT 3개 모듈은 반드시 동일 버전으로 맞춘다.
+    // 섞여 있으면 0.12.x에만 있는 io.jsonwebtoken.security.SecureRequest 같은 클래스가
+    // 런타임에 누락되어 NoClassDefFoundError가 발생한다.
+    implementation 'io.jsonwebtoken:jjwt-api:0.11.5'
+    runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.11.5'
+    runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.11.5'
 
-    implementation 'io.jsonwebtoken:jjwt-api:0.11.5' // JJWT API
-    runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.11.5' // JJWT 구현체 (runtime에 필요)
-    runtimeOnly 'io.jsonwebtoken:jjwt-jackson:0.11.5' // JJWT의 JSON 파서 (jackson 사용)
+    // DelegatingPasswordEncoder가 Argon2/SCrypt를 실제로 실행할 때 필요.
+    // 없으면 런타임에 NoClassDefFoundError/Illegal block size 류 예외가 난다.
+    implementation 'org.bouncycastle:bcprov-jdk18on:1.78'
 }
 
 tasks.named('test') {
