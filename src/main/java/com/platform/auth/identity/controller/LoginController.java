@@ -16,17 +16,33 @@ import com.platform.auth.identity.exception.ErrorCode;
 import com.platform.auth.identity.exception.ErrorException;
 import com.platform.auth.identity.service.LoginService;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
+@Tag(name = "Auth - Login", description = "로그인 / 로그아웃 엔드포인트")
 @RestController
 @RequestMapping("/auth")
 @RequiredArgsConstructor
 public class LoginController {
 	private final LoginService authService;
 
+	@Operation(
+		summary = "로그인",
+		description = "아이디·비밀번호로 로그인하여 JWT access token을 발급받는다. 동시 세션 한도(기본 3)를 초과하면 409로 거부된다. 이메일 인증이 완료되지 않은 PENDING 계정은 403 EMAIL_NOT_VERIFIED. 탈퇴 계정은 존재 은폐를 위해 401 USER_NOT_FOUND."
+	)
+	@ApiResponses({
+		@ApiResponse(responseCode = "200", description = "로그인 성공, access token 반환"),
+		@ApiResponse(responseCode = "401", description = "아이디 혹은 비밀번호 불일치 / 탈퇴 계정"),
+		@ApiResponse(responseCode = "403", description = "이메일 미인증(PENDING 상태)"),
+		@ApiResponse(responseCode = "409", description = "동시 세션 한도 초과")
+	})
 	@PostMapping("/login")
 	public ApiResponseEntity<LoginDto.Response> login(@RequestBody LoginDto.Request request) {
 		// 1. 비동기 Mono가 아닌 일반 객체를 바로 받습니다.
@@ -36,6 +52,15 @@ public class LoginController {
 		return ApiResponseEntity.success(new LoginDto.Response(token));
 	}
 
+	@Operation(
+		summary = "로그아웃",
+		description = "현재 access token의 jti에 해당하는 Redis 세션을 삭제해 즉시 무효화한다. 다른 기기의 세션은 영향받지 않는다."
+	)
+	@SecurityRequirement(name = "bearerAuth")
+	@ApiResponses({
+		@ApiResponse(responseCode = "200", description = "로그아웃 성공 또는 이미 만료된 세션"),
+		@ApiResponse(responseCode = "401", description = "인증 정보 없음 / 유효하지 않은 토큰")
+	})
 	@PostMapping("/logout")
 	public ApiResponseEntity<Map<String, String>> logout(HttpServletRequest request) {
 		// 1. SecurityContextHolder에서 인증 정보를 가져옵니다. (WebFlux의 exchange.getPrincipal() 대체)

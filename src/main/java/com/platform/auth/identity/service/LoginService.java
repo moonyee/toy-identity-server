@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 
 import com.platform.auth.identity.common.config.JwtTokenUtil;
 import com.platform.auth.identity.domain.entity.User;
+import com.platform.auth.identity.domain.entity.UserStatus;
 import com.platform.auth.identity.domain.repository.UserRepository;
 import com.platform.auth.identity.exception.ErrorCode;
 import com.platform.auth.identity.exception.ErrorException;
@@ -78,9 +79,21 @@ public class LoginService {
 		User user = userRepository.findByUserId(userId)
 			.orElseThrow(() -> new ErrorException(ErrorCode.USER_NOT_FOUND));
 
+		// 탈퇴한 계정은 존재하지 않는 것처럼 은폐한다.
+		// 비밀번호 검증 이전에 차단하여 DELETED 상태의 해시가 공격자에게 노출되지 않게 한다.
+		if (user.getStatus() == UserStatus.DELETED) {
+			throw new ErrorException(ErrorCode.USER_NOT_FOUND);
+		}
+
 		// 비밀번호 불일치 시에도 사용자 존재 여부를 노출하지 않기 위해 동일한 에러 코드를 사용
 		if (!passwordEncoder.matches(rawPassword, user.getPassword())) {
 			throw new ErrorException(ErrorCode.USER_NOT_FOUND);
+		}
+
+		// 이메일 인증이 완료되지 않은 계정은 로그인을 거부.
+		// 비밀번호 검증을 통과한 이후에만 이 분기에 도달하므로, 공격자가 계정 존재 여부를 탐지하는 수단이 되지 않는다.
+		if (user.getStatus() != UserStatus.ACTIVE) {
+			throw new ErrorException(ErrorCode.EMAIL_NOT_VERIFIED);
 		}
 
 		String role = user.getRole() != null ? user.getRole().name() : "ROLE_USER";
