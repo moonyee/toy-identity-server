@@ -40,13 +40,24 @@ public class SecurityConfig {
 				.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
 			)
 			// context-path(/api)가 적용된 후 매처는 /api 가 잘려나간 경로로 비교한다.
+			// v1 인증 코드 엔드포인트는 별도 prefix(/v1/auth/*)로 분리되어 있으며
+			// Gateway 쪽 permit 목록과 반드시 동기화되어야 한다.
+			// Swagger UI / OpenAPI JSON 은 개발 편의상 permit. 운영 profile 에서는 별도 차단 정책으로 제어.
 			.authorizeHttpRequests(auth -> auth
 				.requestMatchers(
 					"/auth/login",
 					"/auth/join",
 					"/auth/check-id",
 					"/auth/check-email",
-					"/auth/verify"
+					"/v1/auth/verify",
+					"/v1/auth/resend",
+					// Swagger / OpenAPI. `/v3/api-docs/**` 는 하위만 매칭해서 `/v3/api-docs` 본체를 놓치므로
+					// 정확 매처를 별도 등록한다. (JwtAuthenticationFilter 의 SKIP_PATHS 와 동일 이유)
+					"/v3/api-docs",
+					"/v3/api-docs/**",
+					"/v3/api-docs.yaml",
+					"/swagger-ui/**",
+					"/swagger-ui.html"
 				).permitAll()
 				.anyRequest().authenticated()
 			)

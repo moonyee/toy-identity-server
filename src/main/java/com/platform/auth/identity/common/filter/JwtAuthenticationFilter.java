@@ -47,12 +47,26 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 	private final ObjectMapper objectMapper;
 
 	private static final String BEARER_PREFIX = "Bearer ";
+	// SecurityConfig.permitAll 목록과 반드시 동일해야 한다. (context-path `/api`가 제거된 기준)
+	// Swagger UI 관련 경로는 prefix 매칭으로 별도 처리(아래 SKIP_PREFIXES)
 	private static final List<String> SKIP_PATHS = List.of(
 		"/auth/login",
 		"/auth/join",
 		"/auth/check-id",
 		"/auth/check-email",
-		"/auth/verify"
+		"/v1/auth/verify",
+		"/v1/auth/resend",
+		// `/v3/api-docs` 는 Swagger UI가 최초로 요청하는 OpenAPI JSON 본체.
+		// prefix `/v3/api-docs/` 만으로는 이 경로 자체를 못 잡으므로 exact 매칭에 반드시 포함.
+		"/v3/api-docs",
+		"/v3/api-docs.yaml",
+		"/swagger-ui.html"
+	);
+	// prefix 매칭. `/swagger-ui/*`, `/v3/api-docs/*` 하위 리소스 모두 통과시킨다.
+	// (swagger-config, 페이지 번들·CSS 등)
+	private static final List<String> SKIP_PREFIXES = List.of(
+		"/swagger-ui/",
+		"/v3/api-docs/"
 	);
 
 	public JwtAuthenticationFilter(
@@ -78,7 +92,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 			: requestUri;
 		log.debug("### Request path: {} (matchPath: {})", requestUri, matchPath);
 
-		if (SKIP_PATHS.contains(matchPath)) {
+		if (SKIP_PATHS.contains(matchPath) || matchesSkipPrefix(matchPath)) {
 			filterChain.doFilter(request, response);
 			return;
 		}
@@ -129,6 +143,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 			log.warn("### Invalid JWT token or filter error: {}", e.getMessage());
 			setErrorResponse(HttpStatus.UNAUTHORIZED, response, "Invalid JWT token");
 		}
+	}
+
+	private boolean matchesSkipPrefix(String path) {
+		for (String prefix : SKIP_PREFIXES) {
+			if (path.startsWith(prefix)) return true;
+		}
+		return false;
 	}
 
 	private void setErrorResponse(HttpStatus status, HttpServletResponse response, String message) throws IOException {

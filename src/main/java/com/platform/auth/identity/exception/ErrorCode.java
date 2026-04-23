@@ -27,7 +27,22 @@ public enum ErrorCode {
 	// USER, LOGIN
 	USER_NOT_FOUND("IE00001", "아이디가 틀렸거나 등록 되어있지 않습니다.", HttpStatus.UNAUTHORIZED),
 	ACCESS_TOKEN_EXPIRED("IE00002", "토큰이 만료되었습니다.", HttpStatus.UNAUTHORIZED),
-	MAX_SESSION_EXCEEDED("IE00003", "최대 동시 접속 수를 초과했습니다.", HttpStatus.CONFLICT);
+	MAX_SESSION_EXCEEDED("IE00003", "최대 동시 접속 수를 초과했습니다.", HttpStatus.CONFLICT),
+
+	// JOIN, EMAIL VERIFICATION
+	USER_ALREADY_EXISTS("IE00004", "이미 존재하는 아이디입니다.", HttpStatus.CONFLICT),
+	EMAIL_ALREADY_EXISTS("IE00005", "이미 등록된 이메일입니다.", HttpStatus.CONFLICT),
+	VERIFICATION_CODE_EXPIRED("IE00006", "인증 코드가 만료되었습니다. 다시 요청해 주세요.", HttpStatus.UNAUTHORIZED),
+	VERIFICATION_CODE_INVALID("IE00007", "인증 코드가 올바르지 않습니다.", HttpStatus.UNAUTHORIZED),
+	EMAIL_NOT_VERIFIED("IE00008", "이메일 인증이 필요합니다.", HttpStatus.FORBIDDEN),
+	MAIL_ALREADY_VERIFIED("IE00009", "이미 인증된 계정입니다.", HttpStatus.CONFLICT),
+	VERIFICATION_MAIL_SEND_FAILED("IE00010", "인증 메일 발송에 실패했습니다.", HttpStatus.INTERNAL_SERVER_ERROR),
+
+	// WITHDRAW
+	// 회원 탈퇴 전용. 탈퇴 엔드포인트에서 비밀번호 재확인 실패 시 사용한다.
+	// USER_NOT_FOUND 와 분리된 이유: 탈퇴는 이미 인증된 사용자가 수행하므로 계정 존재 은폐가 불필요하고,
+	// 비밀번호 오류임을 명확히 하여 UX·감사 로그 구분에 도움이 된다.
+	PASSWORD_MISMATCH("IE00011", "비밀번호가 일치하지 않습니다.", HttpStatus.UNAUTHORIZED);
 
 	private final String code;
 	private final String message;

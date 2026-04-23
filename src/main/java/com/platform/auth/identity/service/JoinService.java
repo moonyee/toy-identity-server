@@ -1,8 +1,9 @@
 package com.platform.auth.identity.service;
 
+import java.security.SecureRandom;
 import java.time.Duration;
-import java.util.UUID;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -24,61 +25,72 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public class JoinService {
 
-	private final UserRepository userRepository;
-	private final PasswordEncoder passwordEncoder;
-	// JoinService는 단순 String key/value만 다루므로 StringRedisTemplate으로 충분.
-	private final StringRedisTemplate redisTemplate;
-	private final ApplicationEventPublisher eventPublisher;
+    private static final String CODE_KEY_PREFIX = "auth:code:";
 
-	@Transactional
-	public String join(JoinDto.Request request) {
-		if (userRepository.existsByUserId(request.getUserId())) {
-			throw new ErrorException(ErrorCode.USER_NOT_FOUND, "이미 존재하는 아이디입니다.");
-		}
+    private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final StringRedisTemplate redisTemplate;
+    private final ApplicationEventPublisher eventPublisher;
+    private final SecureRandom secureRandom = new SecureRandom();
 
-		User user = User.builder()
-			.userId(request.getUserId())
-			.password(passwordEncoder.encode(request.getPassword()))
-			.userName(request.getUserName())
-			.email(request.getEmail())
-			.status(UserStatus.PENDING)
-			.role(UserRole.ROLE_USER)
-			.build();
+    @Value("${auth.verification.code-ttl-seconds:180}")
+    private long codeTtlSeconds;
 
-		userRepository.save(user);
+    /**
+     * 회원가입 플로우:
+     * <ol>
+     *   <li>아이디/이메일 중복 검사</li>
+     *   <li>PENDING 상태로 User 저장 (해시된 비밀번호)</li>
+     *   <li>6자리 코드 생성 → {@code auth:code:{email}} 에 TTL 180초로 저장</li>
+     *   <li>{@link UserRegisteredEvent} 발행 — {@code AFTER_COMMIT} 후 가상 스레드로 메일 발송</li>
+     * </ol>
+     * 트랜잭션이 롤백되면 Redis 키·메일 모두 발생하지 않도록
+     * Redis write는 저장 직후, publish는 리스너가 AFTER_COMMIT 시점에 동작.
+     *
+     * <p>참고: Redis write 자체는 트랜잭션 바깥이라 이론적으로 "DB 실패 시 Redis 잔여"가 가능하나,
+     * 코드는 어차피 TTL 180초로 자동 소멸하고, 사용자가 활성화되지 않은 email로 로그인도 막혀 있다.
+     * 이 수준의 일관성이면 충분 — Saga/2PC까지는 도입하지 않는다.
+     */
+    @Transactional
+    public String join(JoinDto.Request request) {
+        if (userRepository.existsByUserId(request.getUserId())) {
+            throw new ErrorException(ErrorCode.USER_ALREADY_EXISTS);
+        }
+        if (userRepository.existsByEmail(request.getEmail())) {
+            throw new ErrorException(ErrorCode.EMAIL_ALREADY_EXISTS);
+        }
 
-		String authToken = UUID.randomUUID().toString();
-		redisTemplate.opsForValue().set("EMAIL_AUTH:" + authToken, user.getUserId(), Duration.ofMinutes(30));
+        User user = User.builder()
+            .userId(request.getUserId())
+            .password(passwordEncoder.encode(request.getPassword()))
+            .userName(request.getUserName())
+            .email(request.getEmail())
+            .status(UserStatus.PENDING)
+            .role(UserRole.ROLE_USER)
+            .build();
+        userRepository.save(user);
 
-		// TODO: UserRegisteredEventListener / MailService가 빈 껍데기 상태이므로
-		// 실제 이메일은 발송되지 않는다. 메일 기능은 spring-boot-starter-mail로 완성하거나
-		// 명세에서 제외할지 결정 필요.
-		eventPublisher.publishEvent(new UserRegisteredEvent(user.getEmail(), authToken));
+        String code = generateCode();
+        redisTemplate.opsForValue().set(
+            CODE_KEY_PREFIX + request.getEmail(),
+            code,
+            Duration.ofSeconds(codeTtlSeconds)
+        );
 
-		return user.getUserId();
-	}
+        eventPublisher.publishEvent(new UserRegisteredEvent(request.getEmail(), code));
 
-	@Transactional
-	public void verifyEmail(String token) {
-		String key = "EMAIL_AUTH:" + token;
-		String userId = redisTemplate.opsForValue().get(key);
+        return user.getUserId();
+    }
 
-		if (userId == null) {
-			throw new ErrorException(ErrorCode.UNAUTHORIZED, "만료되거나 유효하지 않은 인증 토큰입니다.");
-		}
+    public boolean isIdAvailable(String userId) {
+        return !userRepository.existsByUserId(userId);
+    }
 
-		User user = userRepository.findByUserId(userId)
-			.orElseThrow(() -> new ErrorException(ErrorCode.USER_NOT_FOUND));
+    public boolean isEmailAvailable(String email) {
+        return !userRepository.existsByEmail(email);
+    }
 
-		user.activate();
-		redisTemplate.delete(key);
-	}
-
-	public boolean isIdAvailable(String userId) {
-		return !userRepository.existsByUserId(userId);
-	}
-
-	public boolean isEmailAvailable(String email) {
-		return !userRepository.existsByEmail(email);
-	}
+    private String generateCode() {
+        return String.format("%06d", secureRandom.nextInt(1_000_000));
+    }
 }

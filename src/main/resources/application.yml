@@ -13,6 +13,7 @@ jwt:
 
 # Jasypt 마스터 비밀번호. 절대 평문으로 yml에 두지 말고
 # 운영에서는 -Djasypt.encryptor.password 또는 환경변수 JASYPT_PASSWORD로 주입한다.
+# dev -Djasypt.encryptor.password=test-only-password-do-not-use-in-prod
 jasypt:
   encryptor:
     bean: jasyptStringEncryptor
@@ -23,8 +24,35 @@ jasypt:
 
 auth:
   max-session: 3
+  verification:
+    code-ttl-seconds: 180
 
 spring:
+  # Naver SMTP (smtp.naver.com:465, implicit SSL). 운영에서는 반드시 앱 비밀번호를 발급 받아
+  # NAVER_MAIL_USERNAME(예: alice@naver.com) / NAVER_MAIL_PASSWORD 환경변수로 주입.
+  # 2단계 인증이 활성화된 계정이면 일반 비밀번호로는 SMTP 인증이 실패한다.
+  mail:
+    host: smtp.naver.com
+    port: 465
+    username: ${NAVER_MAIL_USERNAME:}
+    password: ${NAVER_MAIL_PASSWORD:}
+    default-encoding: UTF-8
+    properties:
+      mail:
+        smtp:
+          auth: true
+          ssl:
+            enable: true
+            trust: smtp.naver.com
+          socketFactory:
+            class: javax.net.ssl.SSLSocketFactory
+            port: 465
+            fallback: false
+          starttls:
+            enable: false
+          connectiontimeout: 5000
+          timeout: 5000
+          writetimeout: 5000
   # Virtual Threads (JEP 444) 활성화.
   # Tomcat이 요청당 가상 스레드로 동작해 JDBC 블로킹 호출 동안에도
   # OS 스레드를 점유하지 않으므로 동시 처리량이 크게 향상된다.
